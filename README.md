@@ -1,6 +1,6 @@
 # AI Job Application Agent
 
-An end-to-end agentic pipeline that autonomously applies to jobs on your behalf. Give it a queue of job URLs — it tailors your resume, writes a cover letter, opens a real browser, detects the ATS, fills every form field intelligently, and submits.
+An end-to-end agentic pipeline that autonomously applies to jobs on your behalf. Give it a queue of job URLs — it tailors your resume, writes a cover letter, opens a real browser, detects the ATS, fills every form field intelligently, and submits .
 
 ---
 
