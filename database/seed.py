@@ -9,6 +9,7 @@ Run via:
 
 Idempotent — skips seeding if Alex Chen already exists.
 """
+import os
 from database.connection import init_db, get_session
 from database.models import User, WorkExperience, Education, Skill, CustomAnswer, Job, JobStatus
 
@@ -233,6 +234,15 @@ def seed_demo() -> None:
 
         session.commit()
         print(f"[Seed] Created demo user: Alex Chen (id={user.id})")
+
+        # Generate resume PDF if missing
+        resume_path = "assets/resumes/alex_chen_resume.pdf"
+        if not os.path.exists(resume_path):
+            try:
+                from assets.resumes.generate_resume import generate_alex_chen_resume
+                generate_alex_chen_resume(resume_path)
+            except Exception as exc:
+                print(f"[Seed] Resume PDF generation skipped: {exc}")
 
         _seed_jobs(session)
 
