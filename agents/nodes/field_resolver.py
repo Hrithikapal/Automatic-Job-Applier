@@ -146,12 +146,12 @@ async def _resolve_from_llm(
     job_title: str,
 ) -> FieldResolutionResult:
     """Ask Claude to infer the best answer and return a confidence score."""
-    from langchain_anthropic import ChatAnthropic
+    from langchain_groq import ChatGroq
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    llm = ChatAnthropic(
-        model="claude-opus-4-6",
-        api_key=os.getenv("ANTHROPIC_API_KEY"),
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=os.getenv("GROQ_API_KEY"),
         temperature=0.1,
         max_tokens=256,
     )

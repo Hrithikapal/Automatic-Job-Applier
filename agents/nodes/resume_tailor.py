@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from langchain_anthropic import ChatAnthropic
+from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agents.state import AgentState
@@ -19,10 +19,10 @@ from agents.state import AgentState
 # LLM setup
 # ---------------------------------------------------------------------------
 
-def _get_llm() -> ChatAnthropic:
-    return ChatAnthropic(
-        model="claude-opus-4-6",
-        api_key=os.getenv("ANTHROPIC_API_KEY"),
+def _get_llm() -> ChatGroq:
+    return ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=os.getenv("GROQ_API_KEY"),
         temperature=0.3,   # low temp for consistent, structured output
         max_tokens=4096,
     )
