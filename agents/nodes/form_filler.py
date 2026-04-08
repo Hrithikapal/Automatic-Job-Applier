@@ -22,13 +22,11 @@ def _get_handler(platform: str, session: BrowserSession):
     """Return the right ATS handler for the detected platform."""
     from browser.ats.workday import WorkdayHandler
     from browser.ats.greenhouse import GreenhouseHandler
-    from browser.ats.lever import LeverHandler
     from browser.ats.linkedin import LinkedInHandler
 
     handlers = {
         "workday":    WorkdayHandler,
         "greenhouse": GreenhouseHandler,
-        "lever":      LeverHandler,
         "linkedin":   LinkedInHandler,
         # amazon/microsoft jobs redirect to Workday
         "amazon":     WorkdayHandler,
@@ -43,7 +41,6 @@ def _get_credentials(platform: str) -> tuple[str, str]:
     platform_map = {
         "workday":    ("WORKDAY_EMAIL",    "WORKDAY_PASSWORD"),
         "greenhouse": ("GREENHOUSE_EMAIL", "GREENHOUSE_PASSWORD"),
-        "lever":      ("LEVER_EMAIL",      "LEVER_PASSWORD"),
         "linkedin":   ("LINKEDIN_EMAIL",   "LINKEDIN_PASSWORD"),
         "amazon":     ("WORKDAY_EMAIL",    "WORKDAY_PASSWORD"),
         "microsoft":  ("WORKDAY_EMAIL",    "WORKDAY_PASSWORD"),

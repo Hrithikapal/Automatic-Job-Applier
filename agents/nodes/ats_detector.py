@@ -31,10 +31,6 @@ ATS_URL_PATTERNS: dict[str, list[str]] = {
         r"app\.greenhouse\.io",
         r"greenhouse\.io/embed",
     ],
-    "lever": [
-        r"jobs\.lever\.co",
-        r"lever\.co/",
-    ],
     "linkedin": [
         r"linkedin\.com/jobs",
         r"linkedin\.com/hiring",
@@ -90,20 +86,6 @@ ATS_DOM_FINGERPRINTS: dict[str, dict] = {
         "meta_tags": [
             {"name": "generator", "content_pattern": r"greenhouse"},
         ],
-    },
-    "lever": {
-        "selectors": [
-            ".application-form",
-            "form.posting-application",
-            "[class*='lever-']",
-            ".posting-apply",
-            "#application-form",
-        ],
-        "script_patterns": [
-            r"lever\.co/.*\.js",
-            r"jobs\.lever\.co",
-        ],
-        "meta_tags": [],
     },
     "linkedin": {
         "selectors": [

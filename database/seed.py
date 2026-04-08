@@ -2,7 +2,7 @@
 database/seed.py — Seed the demo candidate profile and job queue.
 
 Demo user: Alex Chen — mid-level Software Engineer, 3.5 years experience.
-Demo jobs: 6 real URLs across Workday, Greenhouse, and Lever.
+Demo jobs: 6 URLs across Workday, Greenhouse, and LinkedIn Easy Apply.
 
 Run via:
     python demo.py --seed-only
@@ -48,18 +48,20 @@ DEMO_JOBS = [
         "title": "Software Engineer",
         "ats_platform": "greenhouse",
     },
-    # Lever
+    # LinkedIn Easy Apply
+    # NOTE: Replace these job IDs with real LinkedIn Easy Apply listings.
+    # Find them at linkedin.com/jobs — look for the "Easy Apply" button.
     {
-        "url": "https://jobs.lever.co/figma/6e8b4a19-e7ba-4f4c-a0bd-c7e4950d7966",
-        "company": "Figma",
-        "title": "Software Engineer, Product",
-        "ats_platform": "lever",
+        "url": "https://www.linkedin.com/jobs/view/4119952906/",
+        "company": "Dropbox",
+        "title": "Software Engineer",
+        "ats_platform": "linkedin",
     },
     {
-        "url": "https://jobs.lever.co/ramp/fd9dd7c1-e4d3-4c67-b290-3d5d89eaef8c",
-        "company": "Ramp",
+        "url": "https://www.linkedin.com/jobs/view/4089871234/",
+        "company": "Atlassian",
         "title": "Software Engineer",
-        "ats_platform": "lever",
+        "ats_platform": "linkedin",
     },
 ]
 
