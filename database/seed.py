@@ -226,6 +226,12 @@ def seed_demo() -> None:
             ("expected_start_date", "As soon as possible",
              "Can negotiate based on notice period"),
             ("us_citizen", "Yes", None),
+            ("privacy_policy", "Yes",
+             "Agree to privacy policy and data processing"),
+            ("data_processing", "Yes",
+             "Agree to data processing for application"),
+            ("terms_and_conditions", "Yes",
+             "Agree to terms and conditions"),
         ]
 
         for key, value, notes in custom_answers:

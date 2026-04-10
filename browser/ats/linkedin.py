@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import List, Optional
+from typing import List
 
 from browser.ats.base import BaseATSHandler
 from browser.session import BrowserSession
@@ -36,22 +36,26 @@ class LinkedInHandler(BaseATSHandler):
         "button:has-text('Apply')",
     ]
 
-    MODAL_SELECTOR = ".jobs-easy-apply-modal, [role='dialog'].artdeco-modal"
+    MODAL_SELECTOR = ".jobs-easy-apply-modal, [role='dialog']"
 
     _NEXT_SELECTORS = [
         "button[aria-label='Continue to next step']",
         "button[aria-label*='Continue to next']",
         "button[aria-label*='next step']",
+        "button:has-text('Next')",
+        "button:has-text('Continue')",
     ]
     _REVIEW_SELECTORS = [
         "button[aria-label='Review your application']",
         "button[aria-label*='Review your']",
         "button[aria-label*='Review']",
+        "button:has-text('Review')",
     ]
     _SUBMIT_SELECTORS = [
         "button[aria-label='Submit application']",
         "button[aria-label*='Submit application']",
-        "button[aria-label*='Submit']",
+        "button:has-text('Submit application')",
+        "button:has-text('Submit')",
     ]
 
     _FOOTER_PRIMARY = (
@@ -82,63 +86,33 @@ class LinkedInHandler(BaseATSHandler):
     async def sign_in(self, email: str, password: str) -> bool:
         """Sign in via linkedin.com/login before navigating to the job page."""
         try:
-            # Already signed in check — only .global-nav__me appears for authenticated users
             already = await self.page.query_selector(".global-nav__me")
             if already and await already.is_visible():
                 print("    [linkedin] already signed in")
                 return True
 
-            print("    [linkedin] navigating to LinkedIn login page")
-            await self.page.goto(self.LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
-            # Wait for React to render the form
-            await asyncio.sleep(2)
-            print(f"    [linkedin] login page loaded — URL: {self.page.url}")
+            print("    [linkedin] signing in")
+            await self.page.goto(self.LOGIN_URL, wait_until="load", timeout=30_000)
 
-            # Fill email — page.fill() internally waits for element + actionability
-            _email_filled = False
-            for _sel in ("#username", "input[name='session_key']",
-                         "input[autocomplete='username']", "input[type='text']"):
-                try:
-                    await self.page.fill(_sel, email, timeout=8_000)
-                    _email_filled = True
-                    print(f"    [linkedin] filled email via {_sel!r}")
-                    break
-                except Exception:
-                    continue
-
-            if not _email_filled:
-                print(f"    [linkedin] email input not found — URL: {self.page.url}")
-                return False
+            # Fill email — page.fill waits for element to appear + be editable
+            try:
+                await self.page.fill("#username", email, timeout=10_000)
+            except Exception:
+                # Fallback: semantic label (works even if LinkedIn changes IDs)
+                await self.page.get_by_label("Email or phone", exact=False).first.fill(
+                    email, timeout=5_000)
+            print("    [linkedin] filled email")
 
             # Fill password
-            _pwd_sel = None
-            for _sel in ("#password", "input[name='session_password']", "input[type='password']"):
-                try:
-                    await self.page.fill(_sel, password, timeout=5_000)
-                    _pwd_sel = _sel
-                    print(f"    [linkedin] filled password via {_sel!r}")
-                    break
-                except Exception:
-                    continue
+            try:
+                await self.page.fill("#password", password, timeout=5_000)
+            except Exception:
+                await self.page.get_by_label("Password", exact=False).first.fill(
+                    password, timeout=5_000)
+            print("    [linkedin] filled password")
 
-            if not _pwd_sel:
-                print("    [linkedin] password input not found")
-                return False
-
-            # Submit
-            _clicked = False
-            for _sel in (self.LOGIN_BTN, "button:has-text('Sign in')", "button[type='submit']"):
-                try:
-                    el = await self.page.query_selector(_sel)
-                    if el and await el.is_visible():
-                        await el.click()
-                        _clicked = True
-                        break
-                except Exception:
-                    continue
-            if not _clicked:
-                await self.page.keyboard.press("Enter")
-
+            # Click Sign in
+            await self.page.click("button[type='submit']", timeout=5_000)
             await self.page.wait_for_load_state("load", timeout=20_000)
 
             if "checkpoint" in self.page.url or "challenge" in self.page.url:
@@ -311,178 +285,214 @@ class LinkedInHandler(BaseATSHandler):
     # ------------------------------------------------------------------ #
 
     async def extract_form_fields(self) -> List[dict]:
-        """Extract all visible fields from the current Easy Apply modal step."""
-        await asyncio.sleep(0.3)
+        """
+        Extract all visible fields from the current Easy Apply modal step.
+        Uses semantic HTML selectors (not LinkedIn class names) to survive
+        SDUI markup changes.  Each field includes ``current_value`` so the
+        caller can skip pre-filled fields.
+        """
+        await asyncio.sleep(0.5)
 
-        fields = []
+        fields: List[dict] = []
 
-        groups = await self.page.query_selector_all(
-            ".jobs-easy-apply-modal .jobs-easy-apply-form-section__grouping, "
-            ".jobs-easy-apply-modal .fb-form-element, "
-            ".artdeco-modal .jobs-easy-apply-form-section__grouping, "
-            ".artdeco-modal .fb-form-element, "
-            ".jobs-easy-apply-modal [class*='form-component']"
+        # Find the modal
+        modal = await self.page.query_selector(
+            "[role='dialog'], .jobs-easy-apply-modal, .artdeco-modal"
         )
+        if not modal:
+            print("    [linkedin] no modal found for field extraction")
+            return fields
 
-        if not groups:
-            modal = await self.page.query_selector(
-                ".jobs-easy-apply-modal, .artdeco-modal"
-            )
-            if modal:
-                groups = await modal.query_selector_all(
-                    "div[class*='form'], fieldset, .artdeco-text-input"
+        # --- Select dropdowns ---
+        _PLACEHOLDER_VALUES = {
+            "select an option", "please select", "-select-", "select", "",
+        }
+        for select in await modal.query_selector_all("select"):
+            try:
+                if not await select.is_visible():
+                    continue
+                label = await self._label_for(select)
+                if not label:
+                    continue
+                options = await self._options_from_select(select)
+                current = await select.evaluate(
+                    "el => (el.options[el.selectedIndex] || {}).text || ''"
                 )
+                # Treat placeholder text as empty (not pre-filled)
+                if current.strip().lower() in _PLACEHOLDER_VALUES:
+                    current = ""
+                locator = await self._locator_for(select, "select")
+                fields.append({
+                    "label": label, "field_type": "select",
+                    "locator": locator, "required": True,
+                    "options": options, "current_value": current.strip(),
+                })
+            except Exception:
+                continue
 
-        for group in groups:
-            field_dict = await self._parse_group(group)
-            if field_dict:
-                fields.append(field_dict)
+        # --- Text / tel / email / number inputs ---
+        for inp in await modal.query_selector_all(
+            "input:not([type='hidden']):not([type='file'])"
+            ":not([type='radio']):not([type='checkbox'])"
+        ):
+            try:
+                if not await inp.is_visible():
+                    continue
+                label = await self._label_for(inp)
+                if not label:
+                    continue
+                input_type = await inp.get_attribute("type") or "text"
+                current = await inp.input_value()
+                role = await inp.get_attribute("role") or ""
+                ftype = "typeahead" if role == "combobox" else input_type
+                locator = await self._locator_for(inp, f"input[type='{input_type}']")
+                fields.append({
+                    "label": label, "field_type": ftype,
+                    "locator": locator, "required": True,
+                    "options": [], "current_value": current.strip(),
+                })
+            except Exception:
+                continue
+
+        # --- Textareas ---
+        for ta in await modal.query_selector_all("textarea"):
+            try:
+                if not await ta.is_visible():
+                    continue
+                label = await self._label_for(ta)
+                if not label:
+                    continue
+                current = await ta.input_value()
+                locator = await self._locator_for(ta, "textarea")
+                fields.append({
+                    "label": label, "field_type": "textarea",
+                    "locator": locator, "required": True,
+                    "options": [], "current_value": current.strip(),
+                })
+            except Exception:
+                continue
+
+        # --- Radio groups (e.g. resume selection) ---
+        # If at least one radio is checked, the section is pre-filled → skip.
+        radios = await modal.query_selector_all("input[type='radio']")
+        any_checked = False
+        for r in radios:
+            try:
+                if await r.is_checked():
+                    any_checked = True
+                    break
+            except Exception:
+                pass
+        if radios and not any_checked:
+            label = "Resume"
+            for r in radios:
+                lbl = await self._label_for(r)
+                if lbl:
+                    label = lbl
+                    break
+            name = await radios[0].get_attribute("name") or ""
+            fields.append({
+                "label": label, "field_type": "radio",
+                "locator": f"input[name='{name}']" if name else "input[type='radio']",
+                "required": True, "options": [], "current_value": "",
+            })
+
+        # --- File inputs ---
+        for fi in await modal.query_selector_all("input[type='file']"):
+            try:
+                label = await self._label_for(fi) or "Resume"
+                locator = await self._locator_for(fi, "input[type='file']")
+                fields.append({
+                    "label": label, "field_type": "file",
+                    "locator": locator, "required": True,
+                    "options": [], "current_value": "",
+                })
+            except Exception:
+                continue
 
         print(f"    [linkedin] extracted {len(fields)} fields on this step")
+        for f in fields:
+            tag = " (pre-filled)" if f.get("current_value") else ""
+            print(f"      - {f['label']} [{f['field_type']}]{tag}")
         return fields
 
-    async def _parse_group(self, group) -> Optional[dict]:
-        """Parse a single form group into a field descriptor dict."""
+    # ------------------------------------------------------------------ #
+    # Form-extraction helpers                                              #
+    # ------------------------------------------------------------------ #
+
+    async def _label_for(self, element) -> str:
+        """Find the visible label text for a form element."""
         try:
-            label_el = await group.query_selector("label, legend")
-            if not label_el:
-                return None
-            raw_label = (await label_el.inner_text()).strip()
-            label_text = raw_label.replace("*", "").replace("(required)", "").strip()
-            if not label_text:
-                return None
-
-            select_el    = await group.query_selector("select")
-            textarea_el  = await group.query_selector("textarea")
-            file_el      = await group.query_selector("input[type='file']")
-            checkbox_els = await group.query_selector_all("input[type='checkbox']")
-            radio_els    = await group.query_selector_all("input[type='radio']")
-            text_el      = await group.query_selector(
-                "input[type='text'], input[type='email'], "
-                "input[type='tel'], input[type='number'], "
-                ".artdeco-text-input--input"
-            )
-
-            if select_el:
-                return {
-                    "label": label_text,
-                    "field_type": "select",
-                    "locator": await self._element_locator(select_el, "select"),
-                    "required": True,
-                    "options": await self._select_options(group),
-                }
-
-            if textarea_el:
-                return {
-                    "label": label_text,
-                    "field_type": "textarea",
-                    "locator": await self._element_locator(textarea_el, "textarea"),
-                    "required": True,
-                    "options": [],
-                }
-
-            if file_el:
-                return {
-                    "label": label_text,
-                    "field_type": "file",
-                    "locator": "input[type='file']",
-                    "required": True,
-                    "options": [],
-                }
-
-            if checkbox_els:
-                options = []
-                for c in checkbox_els:
-                    lbl = await self._element_label(c)
-                    val = await c.get_attribute("value") or ""
-                    options.append(lbl or val)
-                name = await checkbox_els[0].get_attribute("name") or ""
-                return {
-                    "label": label_text,
-                    "field_type": "checkbox",
-                    "locator": f"input[name='{name}']" if name else "input[type='checkbox']",
-                    "required": True,
-                    "options": [o for o in options if o],
-                }
-
-            if radio_els:
-                options = []
-                for r in radio_els:
-                    lbl = await self._element_label(r)
-                    val = await r.get_attribute("value") or ""
-                    options.append(lbl or val)
-                name = await radio_els[0].get_attribute("name") or ""
-                return {
-                    "label": label_text,
-                    "field_type": "radio",
-                    "locator": f"input[name='{name}']" if name else "input[type='radio']",
-                    "required": True,
-                    "options": [o for o in options if o],
-                }
-
-            if text_el:
-                input_type = await text_el.get_attribute("type") or "text"
-                is_typeahead = await group.query_selector(
-                    "input[role='combobox'], [class*='typeahead'], "
-                    "[data-test-text-selectable-option__input]"
-                )
-                return {
-                    "label": label_text,
-                    "field_type": "typeahead" if is_typeahead else input_type,
-                    "locator": await self._input_locator(text_el, input_type),
-                    "required": True,
-                    "options": [],
-                }
-
-        except Exception as exc:
-            print(f"    [linkedin] _parse_group error: {exc}")
-
-        return None
-
-    async def _element_locator(self, el, fallback_tag: str) -> str:
-        for attr in ("id", "name"):
-            val = await el.get_attribute(attr)
-            if val:
-                return f"#{val}" if attr == "id" else f"{fallback_tag}[name='{val}']"
-        return fallback_tag
-
-    async def _input_locator(self, text_el, input_type: str) -> str:
-        for attr in (
-            "id",
-            "data-test-single-typeahead-entity-form-component-id",
-            "data-test-text-entity-list-form-item",
-            "name",
-        ):
-            val = await text_el.get_attribute(attr)
-            if val:
-                return f"#{val}" if attr == "id" else f"[{attr}='{val}']"
-        return f"input[type='{input_type}']"
-
-    async def _select_options(self, container) -> List[str]:
-        try:
-            options = await container.query_selector_all("option")
-            result = []
-            for o in options:
-                val = (await o.get_attribute("value") or "").strip()
-                text = (await o.inner_text()).strip()
-                if val and text and text.lower() not in (
-                    "select an option", "please select", "-select-", ""
-                ):
-                    result.append(text)
-            return result
-        except Exception:
-            return []
-
-    async def _element_label(self, input_el) -> str:
-        try:
-            el_id = await input_el.get_attribute("id")
+            # 1. label[for=id]
+            el_id = await element.get_attribute("id")
             if el_id:
-                label = await self.page.query_selector(f"label[for='{el_id}']")
-                if label:
-                    return (await label.inner_text()).strip()
+                lbl = await self.page.query_selector(f"label[for='{el_id}']")
+                if lbl:
+                    return self._clean_label(await lbl.inner_text())
+
+            # 2. aria-label / aria-labelledby
+            aria = await element.get_attribute("aria-label")
+            if aria:
+                return self._clean_label(aria)
+            aria_by = await element.get_attribute("aria-labelledby")
+            if aria_by:
+                lbl = await self.page.query_selector(f"#{aria_by}")
+                if lbl:
+                    return self._clean_label(await lbl.inner_text())
+
+            # 3. Walk up DOM looking for label / legend / visible text
+            text = await element.evaluate("""el => {
+                // ancestor label
+                const lab = el.closest('label');
+                if (lab) return lab.textContent;
+                // sibling / parent text node
+                let node = el.parentElement;
+                for (let i = 0; i < 4 && node; i++) {
+                    const lbl = node.querySelector('label, legend');
+                    if (lbl) return lbl.textContent;
+                    // first non-empty text child that isn't the element itself
+                    for (const c of node.children) {
+                        if (c !== el && c.offsetHeight > 0) {
+                            const t = c.textContent.trim();
+                            if (t && t.length < 120) return t;
+                        }
+                    }
+                    node = node.parentElement;
+                }
+                return '';
+            }""")
+            if text:
+                return self._clean_label(text)
         except Exception:
             pass
         return ""
+
+    @staticmethod
+    def _clean_label(raw: str) -> str:
+        return raw.replace("*", "").replace("(required)", "").strip()
+
+    async def _locator_for(self, el, fallback: str) -> str:
+        """Build a Playwright selector for a form element."""
+        for attr in ("id", "name"):
+            val = await el.get_attribute(attr)
+            if val:
+                return f"#{val}" if attr == "id" else f"{fallback}[name='{val}']"
+        return fallback
+
+    async def _options_from_select(self, select_el) -> List[str]:
+        """Extract option texts from a <select> element."""
+        result = []
+        try:
+            for o in await select_el.query_selector_all("option"):
+                text = (await o.inner_text()).strip()
+                val = (await o.get_attribute("value") or "").strip()
+                if text and val and text.lower() not in (
+                    "select an option", "please select", "-select-", ""
+                ):
+                    result.append(text)
+        except Exception:
+            pass
+        return result
 
     # ------------------------------------------------------------------ #
     # Fill                                                                 #
@@ -533,40 +543,52 @@ class LinkedInHandler(BaseATSHandler):
     # ------------------------------------------------------------------ #
 
     async def next_section(self) -> bool:
-        """Advance to the next modal step. Returns False on final step."""
+        """
+        Advance to the next modal step.
+        Returns:
+          True  — clicked Next/Review, advanced to a new section
+          None  — Submit button found (final page) or no button → form complete
+          False — clicked but validation error kept us on the same page
+        """
         try:
-            # Check for Submit button (final step)
+            modal = await self.page.query_selector("[role='dialog']")
+            target = modal or self.page
+
+            # Check for Submit button → final step, don't click
             for sel in self._SUBMIT_SELECTORS:
-                btn = await self.page.query_selector(sel)
+                btn = await target.query_selector(sel)
                 if btn and await btn.is_visible():
-                    return False
+                    print("    [linkedin] Submit button visible — final step")
+                    return None
 
             # Try Review, then Next/Continue
             for selectors in (self._REVIEW_SELECTORS, self._NEXT_SELECTORS):
                 for sel in selectors:
-                    btn = await self.page.query_selector(sel)
+                    btn = await target.query_selector(sel)
                     if btn and await btn.is_visible():
+                        text = (await btn.inner_text()).strip()
+                        print(f"    [linkedin] clicking '{text}' button")
                         await btn.click()
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(1)
                         return True
 
             # Footer primary button fallback
-            footer_btn = await self.page.query_selector(self._FOOTER_PRIMARY)
+            footer_btn = await target.query_selector(self._FOOTER_PRIMARY)
             if footer_btn and await footer_btn.is_visible():
                 label = (
                     (await footer_btn.get_attribute("aria-label") or "") +
                     (await footer_btn.inner_text())
                 ).lower()
                 if "submit" in label:
-                    return False
+                    return None
                 await footer_btn.click()
                 await asyncio.sleep(0.5)
                 return True
 
-            return False
+            return None
         except Exception as exc:
             print(f"    [linkedin] next_section error: {exc}")
-            return False
+            return None
 
     # ------------------------------------------------------------------ #
     # Submit                                                               #
@@ -575,15 +597,18 @@ class LinkedInHandler(BaseATSHandler):
     async def submit_application(self) -> bool:
         """Click the Submit button and verify the application was sent."""
         try:
+            modal = await self.page.query_selector("[role='dialog']")
+            target = modal or self.page
+
             btn = None
             for sel in self._SUBMIT_SELECTORS:
-                candidate = await self.page.query_selector(sel)
+                candidate = await target.query_selector(sel)
                 if candidate and await candidate.is_visible():
                     btn = candidate
                     break
 
             if not btn:
-                footer = await self.page.query_selector(self._FOOTER_PRIMARY)
+                footer = await target.query_selector(self._FOOTER_PRIMARY)
                 if footer and await footer.is_visible():
                     label = (
                         (await footer.get_attribute("aria-label") or "") +
@@ -596,6 +621,7 @@ class LinkedInHandler(BaseATSHandler):
                 print("    [linkedin] submit button not found")
                 return False
 
+            print("    [linkedin] clicking Submit application")
             await btn.click()
             await asyncio.sleep(1)
 

@@ -209,24 +209,21 @@ class WorkdayHandler(BaseATSHandler):
             await self._handle_sign_in_if_needed()
 
             # Step 4 — Detect and recover from "Something went wrong" page.
-            # Poll every 300 ms (up to 6 s first attempt, 3 s on retries).
-            # Break immediately on crash detection or when form fields are visible.
+            # Check once after a short pause; if crashed, reload fast.
             for _attempt in range(3):
-                poll_iters = 20 if _attempt == 0 else 10   # × 300 ms = 6 s / 3 s
+                await self.page.wait_for_timeout(150)
                 page_text = ""
                 crashed = False
-                for _ in range(poll_iters):
-                    await self.page.wait_for_timeout(300)
-                    try:
-                        page_text = await self.page.evaluate(
-                            "() => document.documentElement.innerText"
-                        )
-                    except Exception:
-                        page_text = ""
-                    if "something went wrong" in (page_text or "").lower():
-                        crashed = True
-                        break   # crash confirmed — reload immediately, don't wait
-                    # Page is healthy — exit as soon as form elements are visible
+                try:
+                    page_text = await self.page.evaluate(
+                        "() => document.documentElement.innerText"
+                    )
+                except Exception:
+                    page_text = ""
+                if "something went wrong" in (page_text or "").lower():
+                    crashed = True
+                else:
+                    # Quick check — form already visible?
                     try:
                         has_form = await self.page.query_selector(
                             "[data-automation-id='formField'], input[type='text']"
@@ -234,14 +231,13 @@ class WorkdayHandler(BaseATSHandler):
                         if has_form:
                             break
                     except Exception:
-                        break
+                        pass
 
                 if not crashed:
                     break  # page healthy — stop reload loop
 
                 print(f"    [workday] 'Something went wrong' detected (attempt {_attempt+1}) — reloading")
-                await self.page.reload(wait_until="domcontentloaded", timeout=20_000)
-                await self.page.wait_for_timeout(500)
+                await self.page.reload(wait_until="domcontentloaded", timeout=10_000)
 
             # Step 5 — Wait for the first wizard section to load.
             # Use a broad set of selectors since data-automation-id='formField' is

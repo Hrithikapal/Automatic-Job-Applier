@@ -172,11 +172,9 @@ async def fill_form_node(state: AgentState) -> dict:
 
     # Recover from "Something went wrong" error pages (e.g. Workday transient error
     # that appears *after* navigate_to_apply returns, once the wizard's internal API
-    # call fails).  Poll every 300 ms — exit immediately once crash is confirmed or
-    # form fields are visible.  Uses domcontentloaded (not networkidle) so Workday's
-    # long-poll XHRs don't add 10+ seconds to every reload.
+    # call fails).  Uses domcontentloaded (not networkidle) so Workday's long-poll
+    # XHRs don't add 10+ seconds to every reload.
     for _err_attempt in range(3):
-        # First check if the page is already healthy (no reload needed yet)
         try:
             _page_text = await _session.page.evaluate("() => document.documentElement.innerText")
             if "something went wrong" not in (_page_text or "").lower():
@@ -186,20 +184,18 @@ async def fill_form_node(state: AgentState) -> dict:
 
         print(f"  [fill_form] 'Something went wrong' page (attempt {_err_attempt + 1}) — reloading")
         try:
-            await _session.page.reload(wait_until="domcontentloaded", timeout=20_000)
+            await _session.page.reload(wait_until="domcontentloaded", timeout=10_000)
         except Exception as _rel_exc:
             print(f"  [fill_form] reload error: {_rel_exc}")
 
-        # Wait for form or detect another crash — exits as soon as either appears
         try:
             await _session.page.wait_for_selector(
                 "[data-automation-id='formField'], input[type='text']",
-                timeout=8_000,
+                timeout=4_000,
             )
         except Exception:
-            pass   # timed out — outer loop re-checks page_text on next attempt
+            pass
     else:
-        # All 3 reloads exhausted — check one final time
         try:
             _page_text = await _session.page.evaluate("() => document.documentElement.innerText")
             if "something went wrong" in (_page_text or "").lower():
@@ -270,6 +266,21 @@ async def fill_form_node(state: AgentState) -> dict:
         # Skip fields already resolved in a prior HITL iteration
         if label and label in already_resolved_labels:
             print(f"    skipping already-resolved '{label}'")
+            continue
+
+        # Skip pre-filled fields (LinkedIn pre-fills contact info from profile)
+        current_value = field.get("current_value", "")
+        if current_value:
+            print(f"    skipping pre-filled '{label}' = '{current_value[:40]}'")
+            resolved_fields.append({
+                "field_label": label,
+                "field_type": field_type,
+                "field_locator": locator,
+                "resolved_value": current_value,
+                "resolution_source": "prefilled",
+                "confidence": 1.0,
+                "context": "pre-filled by ATS",
+            })
             continue
 
         # File fields — use generated pipeline files directly, never LLM/HITL

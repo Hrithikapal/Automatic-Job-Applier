@@ -17,6 +17,7 @@ Form structure (from DOM inspection):
 from __future__ import annotations
 
 import os
+import re
 from typing import List
 
 from browser.ats.base import BaseATSHandler
@@ -29,7 +30,14 @@ class GreenhouseHandler(BaseATSHandler):
     # Stable Greenhouse selectors
     # ------------------------------------------------------------------
     FORM_SELECTOR      = "#application_form, form.application, form[action*='applications'], main form, form"
-    SUBMIT_BTN         = "#submit_app, input[type='submit'][value*='Submit'], button[type='submit']"
+    SUBMIT_BTN         = (
+        "#submit_app, "
+        "input[type='submit'][value*='Submit'], "
+        "button[type='submit'], "
+        "button:has-text('Submit application'), "
+        "button:has-text('Submit'), "
+        "input[type='submit']"
+    )
     APPLY_BTN          = (
         "a#header_apply_button, "
         "a.apply-button, "
@@ -225,6 +233,19 @@ class GreenhouseHandler(BaseATSHandler):
                     "options":    options,
                 })
 
+        # Sort fields by vertical DOM position so they are filled top-to-bottom
+        # (file inputs added in step 2 may appear above text fields from step 1)
+        positioned: list[tuple[float, int]] = []
+        for i, field in enumerate(fields):
+            try:
+                el = await self.page.query_selector(field["locator"])
+                box = await el.bounding_box() if el else None
+                positioned.append((box["y"] if box else float("inf"), i))
+            except Exception:
+                positioned.append((float("inf"), i))
+        positioned.sort()
+        fields = [fields[i] for _, i in positioned]
+
         print(f"    [greenhouse] extracted {len(fields)} fields")
         return fields
 
@@ -298,10 +319,199 @@ class GreenhouseHandler(BaseATSHandler):
         For file inputs Greenhouse hides the <input type='file'> behind an
         'Attach' button — we set_input_files directly on the hidden input,
         which Playwright supports without needing to click the button first.
+
+        For text-like inputs, types the value then checks for an autocomplete
+        dropdown (e.g. the Country/phone-code picker) and clicks the best
+        matching option if one appears.
         """
         if field_type == "file":
             return await self._fill_file(locator, value)
-        return await self.fill_field_generic(locator, value, field_type)
+        if field_type == "select":
+            return await self._fill_select(locator, value)
+        # Text-like fields: type + handle autocomplete dropdown
+        return await self._fill_with_autocomplete(locator, value, field_type)
+
+    async def _fill_with_autocomplete(
+        self, locator: str, value: str, field_type: str
+    ) -> bool:
+        """
+        Type into a field, then detect any dropdown that appears and
+        select the best matching option.
+
+        Strategy:
+          1. Type the value character-by-character
+          2. Use JS to find visible elements BELOW the input that look
+             like dropdown options (position-based, no CSS selector guessing)
+          3. If JS click works → done
+          4. If not → use keyboard (ArrowDown + Enter) as universal fallback
+        """
+        try:
+            # Clear and type character-by-character to trigger autocomplete JS
+            await self.page.fill(locator, "")
+            await self.page.type(locator, value, delay=50)
+
+            # Wait for dropdown to render
+            await self.page.wait_for_timeout(800)
+
+            # Get input element position to find elements below it
+            input_box = await self.page.locator(locator).bounding_box()
+            if not input_box:
+                return True
+
+            input_bottom = input_box["y"] + input_box["height"]
+
+            # --- Approach 1: JS position-based detection ---
+            # Find small visible elements BELOW the input with matching text.
+            # Does not rely on any CSS class, ARIA role, or positioning method.
+            result = await self.page.evaluate("""(args) => {
+                const { value, inputBottom } = args;
+                const valueLower = value.toLowerCase();
+
+                const all = document.querySelectorAll('div, li, span, a, option, [role="option"]');
+                let startsMatch = null;
+                let containsMatch = null;
+                let firstBelow = null;
+
+                for (const el of all) {
+                    const tag = el.tagName.toLowerCase();
+                    if (['input','textarea','label','form','body','html','script','style','h1','h2','h3','h4','select'].includes(tag))
+                        continue;
+
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width < 20 || rect.height < 10) continue;
+                    // Must be below or near the bottom edge of the input
+                    if (rect.top < inputBottom - 5) continue;
+                    // Must be within reasonable range below
+                    if (rect.top > inputBottom + 400) continue;
+                    // Must be small-ish (not a large container)
+                    if (rect.height > 200) continue;
+
+                    const style = window.getComputedStyle(el);
+                    if (style.display === 'none' || style.visibility === 'hidden') continue;
+
+                    const text = (el.innerText || '').trim();
+                    if (!text || text.length > 500) continue;
+
+                    if (!firstBelow) firstBelow = { el, text };
+
+                    const clean = text.replace(/^[^a-zA-Z0-9]+/, '').trim();
+                    if (!startsMatch && clean.toLowerCase().startsWith(valueLower)) {
+                        startsMatch = { el, text };
+                    }
+                    if (!containsMatch && text.toLowerCase().includes(valueLower)) {
+                        containsMatch = { el, text };
+                    }
+                }
+
+                const pick = startsMatch || containsMatch || firstBelow;
+                if (pick) {
+                    pick.el.click();
+                    return { clicked: true, text: pick.text.substring(0, 80), hasDropdown: true };
+                }
+                return { clicked: false, hasDropdown: firstBelow !== null };
+            }""", {"value": value, "inputBottom": input_bottom})
+
+            if result and result.get("clicked"):
+                print(f"    [greenhouse] selected dropdown option: {result.get('text', '')}")
+                await self.page.wait_for_timeout(200)
+                return True
+
+            # --- Approach 2: Keyboard ArrowDown + Enter ---
+            # Universal fallback — works with any dropdown/combobox that
+            # handles keyboard navigation (virtually all of them).
+            # Temporarily block form submission so Enter doesn't submit.
+            if result and result.get("hasDropdown"):
+                await self.page.evaluate("""() => {
+                    window.__blockSubmit = e => { e.preventDefault(); e.stopPropagation(); };
+                    document.querySelectorAll('form').forEach(
+                        f => f.addEventListener('submit', window.__blockSubmit, true)
+                    );
+                }""")
+                try:
+                    await self.page.keyboard.press("ArrowDown")
+                    await self.page.wait_for_timeout(150)
+                    await self.page.keyboard.press("Enter")
+                    await self.page.wait_for_timeout(150)
+                    print(f"    [greenhouse] selected dropdown via keyboard for '{value}'")
+                finally:
+                    await self.page.evaluate("""() => {
+                        if (window.__blockSubmit) {
+                            document.querySelectorAll('form').forEach(
+                                f => f.removeEventListener('submit', window.__blockSubmit, true)
+                            );
+                            delete window.__blockSubmit;
+                        }
+                    }""")
+                return True
+
+            # No dropdown appeared — the typed text is the final value
+            return True
+        except Exception as exc:
+            print(f"    [greenhouse] autocomplete fill failed for {locator!r}: {exc}")
+            try:
+                await self.page.evaluate("""() => {
+                    if (window.__blockSubmit) {
+                        document.querySelectorAll('form').forEach(
+                            f => f.removeEventListener('submit', window.__blockSubmit, true)
+                        );
+                        delete window.__blockSubmit;
+                    }
+                }""")
+            except Exception:
+                pass
+            return await self.fill_field_generic(locator, value, field_type)
+
+    async def _fill_select(self, locator: str, value: str) -> bool:
+        """
+        Fill a <select> with fuzzy matching.
+
+        1. Try exact label match
+        2. Try exact value match
+        3. Try partial/fuzzy match (option contains value or vice versa)
+        4. Fallback: select the first non-empty option
+        """
+        try:
+            # 1. Exact label match
+            try:
+                await self.page.select_option(locator, label=value)
+                return True
+            except Exception:
+                pass
+            # 2. Exact value match
+            try:
+                await self.page.select_option(locator, value=value)
+                return True
+            except Exception:
+                pass
+
+            # 3. Fuzzy match — option text contains the value or vice versa
+            options = await self.page.query_selector_all(f"{locator} option")
+            value_lower = value.lower()
+            first_valid_value = None
+            first_valid_text = None
+            for opt in options:
+                opt_value = (await opt.get_attribute("value") or "").strip()
+                if not opt_value:
+                    continue
+                text = (await opt.inner_text()).strip()
+                if first_valid_value is None:
+                    first_valid_value = opt_value
+                    first_valid_text = text
+                if value_lower in text.lower() or text.lower() in value_lower:
+                    await self.page.select_option(locator, value=opt_value)
+                    print(f"    [greenhouse] fuzzy-matched select option: {text}")
+                    return True
+
+            # 4. No match at all — select the first non-empty option
+            if first_valid_value:
+                await self.page.select_option(locator, value=first_valid_value)
+                print(f"    [greenhouse] fallback: selected first option: {first_valid_text}")
+                return True
+
+            return False
+        except Exception as exc:
+            print(f"    [greenhouse] select fill failed for {locator!r}: {exc}")
+            return False
 
     async def _fill_file(self, locator: str, file_path: str) -> bool:
         """Upload a file to a (possibly hidden) Greenhouse file input."""
@@ -324,9 +534,10 @@ class GreenhouseHandler(BaseATSHandler):
     async def next_section(self) -> bool:
         """
         Greenhouse applications are single-page — no Next button.
-        Always returns False so the pipeline moves straight to submit.
+        Returns None so the pipeline knows there is no next section
+        and proceeds to submit (False would mean validation error).
         """
-        return False
+        return None
 
     async def submit_application(self) -> bool:
         """Click Submit and verify a confirmation element or URL change."""

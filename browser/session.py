@@ -40,17 +40,40 @@ class BrowserSession:
         self._browser = await self._playwright.chromium.launch(
             headless=headless,
             slow_mo=slow_mo,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ],
         )
         self._context = await self._browser.new_context(
             user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
+                "Chrome/131.0.0.0 Safari/537.36"
             ),
             viewport={"width": 1280, "height": 720},
             locale="en-US",
         )
+
+        # Hide automation fingerprints so sites serve their normal page
+        await self._context.add_init_script("""
+            // Remove navigator.webdriver flag
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+            });
+            // Ensure window.chrome exists (missing in automation mode)
+            if (!window.chrome) {
+                window.chrome = { runtime: {} };
+            }
+            // Override permissions query to behave like a real browser
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) =>
+                parameters.name === 'notifications'
+                    ? Promise.resolve({ state: Notification.permission })
+                    : originalQuery(parameters);
+        """)
+
         self.page = await self._context.new_page()
 
     async def close(self) -> None:
