@@ -45,19 +45,6 @@ python demo.py --seed-only
 python demo.py
 ```
 
-### What the demo does
-
-1. **Seeds** a demo candidate profile (Hrithika Pal — mid-level SWE, 3.5 years experience, 2 work roles, 18 skills, 19 pre-answered form questions) and queues 6 real jobs across Workday, Greenhouse, and LinkedIn.
-2. **For each job**, the pipeline:
-   - Scrapes the job description from the URL
-   - Tailors the resume to match the JD using an LLM
-   - Generates a 3-paragraph cover letter
-   - Opens a real Chromium browser
-   - Detects the ATS platform (Workday, Greenhouse, LinkedIn, Lever, Ashby)
-   - Signs in with your credentials
-   - Fills every form field (contact info, work authorization, EEO questions, file uploads)
-   - Submits the application
-
 ### CLI options
 
 ```bash
