@@ -1,5 +1,5 @@
 """
-assets/resumes/generate_resume.py — Generate Alex Chen's demo resume PDF.
+assets/resumes/generate_resume.py — Generate Hrithika Pal's demo resume PDF.
 
 Uses reportlab to produce a clean, ATS-friendly single-page PDF.
 Called automatically by seed.py if the PDF does not exist.
@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 
 
-def generate_alex_chen_resume(output_path: str = "assets/resumes/alex_chen_resume.pdf") -> str:
+def generate_hrithika_pal_resume(output_path: str = "assets/resumes/hrithika_pal_resume.pdf") -> str:
     """Generate the demo resume PDF and return the output path."""
     try:
         from reportlab.lib.pagesizes import letter
@@ -46,7 +46,8 @@ def generate_alex_chen_resume(output_path: str = "assets/resumes/alex_chen_resum
         fontName="Helvetica-Bold",
         textColor=colors.HexColor("#1a1a2e"),
         alignment=TA_CENTER,
-        spaceAfter=2,
+        spaceAfter=6,
+        leading=28,
     )
     contact_style = ParagraphStyle(
         "Contact",
@@ -116,10 +117,10 @@ def generate_alex_chen_resume(output_path: str = "assets/resumes/alex_chen_resum
     story = []
 
     # ── Header ───────────────────────────────────────────────────────────
-    story.append(Paragraph("Alex Chen", name_style))
+    story.append(Paragraph("Hrithika Pal", name_style))
     story.append(Paragraph(
-        "San Francisco, CA  •  +1 (415) 555-0192  •  alex.chen.dev@gmail.com  •  "
-        "linkedin.com/in/alexchen-swe  •  github.com/alexchen-dev  •  alexchen.dev",
+        "San Francisco, CA  •  +1 (415) 555-0192  •  hrithikapal9@gmail.com  •  "
+        "linkedin.com/in/alexchen-swe  •  github.com/Hrithikapal",
         contact_style,
     ))
     story.append(hr())
@@ -204,4 +205,4 @@ def generate_alex_chen_resume(output_path: str = "assets/resumes/alex_chen_resum
 
 
 if __name__ == "__main__":
-    generate_alex_chen_resume()
+    generate_hrithika_pal_resume()

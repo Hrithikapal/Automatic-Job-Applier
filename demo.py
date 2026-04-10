@@ -76,6 +76,19 @@ def reset_jobs() -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def _prompt_setup_if_needed() -> None:
+    """If the user has no custom answers yet, suggest running setup_answers.py."""
+    from database.connection import get_session_factory
+    from database.models import CustomAnswer
+    with get_session_factory()() as session:
+        count = session.query(CustomAnswer).count()
+    if count == 0:
+        print("\n[Demo] No custom answers found.")
+        print("[Demo] Run  python setup_answers.py  to set up answers for common")
+        print("[Demo] job form questions (sponsorship, salary, notice period, etc.).")
+        print("[Demo] Or continue — HITL will ask you during the run and save answers.\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI Job Application Agent — Demo Runner")
     parser.add_argument("--seed-only", action="store_true",
@@ -84,6 +97,8 @@ def main() -> None:
                         help="Print current job status table and exit")
     parser.add_argument("--reset", action="store_true",
                         help="Reset all jobs to queued status")
+    parser.add_argument("--reseed", action="store_true",
+                        help="Delete all jobs and re-insert DEMO_JOBS fresh")
     parser.add_argument("--user-id", type=int, default=1)
     args = parser.parse_args()
 
@@ -99,18 +114,27 @@ def main() -> None:
         print_status_table()
         return
 
+    if args.reseed:
+        from database.seed import reseed_jobs
+        reseed_jobs()
+        print_status_table()
+        return
+
     # ── Seed ────────────────────────────────────────────────────────────
     print("\n[Demo] Seeding candidate profile and job queue...")
     from database.seed import seed_demo
     seed_demo()
 
+    # Prompt user to run answer setup if no custom answers exist yet
+    _prompt_setup_if_needed()
+
     # Generate resume PDF if it doesn't exist
     import os
-    resume_path = "assets/resumes/alex_chen_resume.pdf"
+    resume_path = "assets/resumes/hrithika_pal_resume.pdf"
     if not os.path.exists(resume_path):
         print("[Demo] Generating resume PDF...")
-        from assets.resumes.generate_resume import generate_alex_chen_resume
-        generate_alex_chen_resume(resume_path)
+        from assets.resumes.generate_resume import generate_hrithika_pal_resume
+        generate_hrithika_pal_resume(resume_path)
     else:
         print(f"[Demo] Resume PDF already exists: {resume_path}")
 

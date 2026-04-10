@@ -1,7 +1,7 @@
 """
 agents/nodes/cover_letter.py — Generate a tailored cover letter for the job.
 
-Uses Claude via langchain-anthropic. Expects user_profile already in state
+Uses Groq LLM via langchain-groq. Expects user_profile already in state
 (loaded by tailor_resume_node). Produces a 3-paragraph cover letter:
   1. Hook — specific role + genuine company enthusiasm
   2. Body — 2 strongest matching experiences with concrete impact
@@ -36,7 +36,7 @@ async def cover_letter_node(state: AgentState) -> dict:
     job_company = state.get("job_company") or "your company"
     job_description = state.get("job_description") or ""
 
-    full_name = profile.get("full_name", "Alex Chen")
+    full_name = profile.get("full_name", "Hrithika Pal")
     email = profile.get("email", "")
     phone = profile.get("phone", "")
     location = profile.get("location", "")

@@ -4,7 +4,7 @@ agents/nodes/field_resolver.py — Resolve a form field value through a 4-step c
 Precedence:
   1. Profile DB   — direct lookup for canonical fields (name, email, phone, etc.)
   2. Custom answers — fuzzy key match against custom_answers table (threshold 0.7)
-  3. LLM inference  — Claude infers answer + confidence score
+  3. LLM inference  — LLM infers answer + confidence score
   4. HITL           — returned as pending if confidence < threshold
 
 Returns a FieldResolutionResult for each field.
@@ -23,6 +23,75 @@ from agents.state import AgentState, FieldResolutionResult
 # Maps normalised label tokens → lambda(profile) → value
 # ---------------------------------------------------------------------------
 
+def _clean_phone(raw: str) -> str:
+    """
+    Strip phone number down to digits only.
+    Only removes a leading country code if the raw number uses international
+    E.164 format (starts with '+'). Local-format numbers (no '+') are returned
+    as raw digits so the stored value reaches the form unchanged.
+    Examples:
+      "+1 (415) 555-0192"  → "4155550192"   (US, strips +1)
+      "+91 98765 43210"    → "9876543210"    (India, strips +91)
+      "04155 550 192"      → "04155550192"   (local format, kept as-is)
+      "093911 36520"       → "09391136520"   (local format, kept as-is)
+    """
+    digits = re.sub(r"\D", "", raw)
+    # Only strip country code when the raw number has an explicit '+' prefix
+    if raw.strip().startswith("+") and len(digits) > 10:
+        for cc_len in (1, 2, 3):          # try 1-digit CC first (+1), then 2 (+91), then 3
+            candidate = digits[cc_len:]
+            if 8 <= len(candidate) <= 10:
+                return candidate
+    return digits
+
+
+def _extract_country_code(phone: str, location: str = "") -> str:
+    """Return searchbox-friendly country name from phone number's E.164 prefix.
+    Falls back to profile location if phone has no international prefix."""
+    p = phone.strip()
+    if p.startswith("+91") or p.startswith("0091"):
+        return "India"
+    if p.startswith("+1") or p.startswith("001"):
+        return "United States"
+    if p.startswith("+44"):
+        return "United Kingdom"
+    if p.startswith("+61"):
+        return "Australia"
+    if p.startswith("+49"):
+        return "Germany"
+    if p.startswith("+33"):
+        return "France"
+    if p.startswith("+86"):
+        return "China"
+    if p.startswith("+81"):
+        return "Japan"
+    if p.startswith("+65"):
+        return "Singapore"
+    if p.startswith("+971"):
+        return "United Arab Emirates"
+    if p.startswith("+966"):
+        return "Saudi Arabia"
+    # Fallback: infer from profile location string
+    loc = location.lower()
+    if "india" in loc:
+        return "India"
+    if "united states" in loc or " ca" in loc or " ny" in loc or " tx" in loc or " wa" in loc:
+        return "United States"
+    if "united kingdom" in loc or "england" in loc or "london" in loc:
+        return "United Kingdom"
+    if "australia" in loc or "sydney" in loc or "melbourne" in loc:
+        return "Australia"
+    if "germany" in loc or "berlin" in loc:
+        return "Germany"
+    if "france" in loc or "paris" in loc:
+        return "France"
+    if "singapore" in loc:
+        return "Singapore"
+    if "united arab emirates" in loc or "dubai" in loc or "uae" in loc:
+        return "United Arab Emirates"
+    return ""
+
+
 PROFILE_FIELD_MAP: dict[str, callable] = {
     # Name variants
     "first_name":           lambda p: p["full_name"].split()[0],
@@ -35,10 +104,21 @@ PROFILE_FIELD_MAP: dict[str, callable] = {
     # Contact
     "email":                lambda p: p["email"],
     "email_address":        lambda p: p["email"],
-    "phone":                lambda p: p["phone"],
-    "phone_number":         lambda p: p["phone"],
-    "mobile":               lambda p: p["phone"],
-    "mobile_number":        lambda p: p["phone"],
+    "phone":                lambda p: _clean_phone(p["phone"]),
+    "phone_number":         lambda p: _clean_phone(p["phone"]),
+    "mobile":               lambda p: _clean_phone(p["phone"]),
+    "mobile_number":        lambda p: _clean_phone(p["phone"]),
+    # Phone sub-fields (Workday wizard)
+    "country_territory_phone_code": lambda p: _extract_country_code(p.get("phone", ""), p.get("location", "")),
+    "country_phone_code":           lambda p: _extract_country_code(p.get("phone", ""), p.get("location", "")),
+    "phone_device_type":            lambda p: "Mobile",
+    "phone_extension":              lambda p: "",   # intentionally blank
+    # "How did you hear" — always pick first dropdown option (value="" triggers first-pick in fill_field)
+    "how_did_you_hear_about_this_job":      lambda p: "",
+    "how_did_you_hear_about_us":            lambda p: "",
+    "how_did_you_hear_about_this_position": lambda p: "",
+    "how_did_you_hear":                     lambda p: "",
+    "how_did_you_find_out_about_this_job":  lambda p: "",
     # Location
     "location":             lambda p: p["location"],
     "city":                 lambda p: p["location"].split(",")[0].strip(),
@@ -77,7 +157,7 @@ def _resolve_from_profile(
     if key in PROFILE_FIELD_MAP:
         try:
             value = PROFILE_FIELD_MAP[key](profile)
-            if value:
+            if value is not None:
                 return FieldResolutionResult(
                     field_label=label,
                     field_type="text",
@@ -145,7 +225,7 @@ async def _resolve_from_llm(
     job_description: str,
     job_title: str,
 ) -> FieldResolutionResult:
-    """Ask Claude to infer the best answer and return a confidence score."""
+    """Ask the LLM to infer the best answer and return a confidence score."""
     from langchain_groq import ChatGroq
     from langchain_core.messages import HumanMessage, SystemMessage
 

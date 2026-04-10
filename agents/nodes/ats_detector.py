@@ -167,8 +167,9 @@ async def detect_from_dom(page) -> Optional[str]:
         # Score meta tags (2 pts each)
         for meta in fingerprint["meta_tags"]:
             try:
+                meta_name = meta["name"]
                 content = await page.evaluate(
-                    f"document.querySelector('meta[name=\"{meta[\"name\"]}\"]')?.content || ''"
+                    f"document.querySelector('meta[name=\"{meta_name}\"]')?.content || ''"
                 )
                 if re.search(meta["content_pattern"], content.lower()):
                     scores[platform] += 2

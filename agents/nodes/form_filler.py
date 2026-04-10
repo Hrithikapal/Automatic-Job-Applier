@@ -9,10 +9,47 @@ submit_node        — clicks submit, closes browser
 from __future__ import annotations
 
 import os
+import re
+from pathlib import Path
 from typing import Optional
 
 from agents.state import AgentState, FieldResolutionResult
 from browser.session import BrowserSession
+
+
+def _save_cover_letter_pdf(text: str, company: str) -> Optional[str]:
+    """Save the generated cover letter text as a PDF file for upload."""
+    if not text:
+        return None
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.units import inch
+
+        safe_company = re.sub(r"[^\w]", "_", (company or "company").lower())[:20]
+        out_dir = Path("assets/cover_letters")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output_path = str(out_dir / f"cover_letter_{safe_company}.pdf")
+
+        doc = SimpleDocTemplate(
+            output_path, pagesize=letter,
+            leftMargin=inch, rightMargin=inch,
+            topMargin=inch, bottomMargin=inch,
+        )
+        style = ParagraphStyle("Body", fontSize=11, leading=16)
+        story = []
+        for line in text.splitlines():
+            if line.strip():
+                safe = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                story.append(Paragraph(safe, style))
+            else:
+                story.append(Spacer(1, 8))
+        doc.build(story)
+        return output_path
+    except Exception as exc:
+        print(f"  [fill_form] cover letter PDF save failed: {exc}")
+        return None
 
 # Shared browser session — lives for the duration of one job run
 _session: Optional[BrowserSession] = None
@@ -63,7 +100,7 @@ async def browser_init_node(state: AgentState) -> dict:
 
     try:
         await _session.page.goto(
-            state["job_url"], wait_until="networkidle", timeout=30_000
+            state["job_url"], wait_until="domcontentloaded", timeout=30_000
         )
         print(f"  [browser_init] page loaded: {state['job_url']}")
     except Exception as exc:
@@ -133,6 +170,44 @@ async def fill_form_node(state: AgentState) -> dict:
     if not _session or not _session.is_open:
         return {"status": "failed", "error": "Browser session not available"}
 
+    # Recover from "Something went wrong" error pages (e.g. Workday transient error
+    # that appears *after* navigate_to_apply returns, once the wizard's internal API
+    # call fails).  Poll every 300 ms — exit immediately once crash is confirmed or
+    # form fields are visible.  Uses domcontentloaded (not networkidle) so Workday's
+    # long-poll XHRs don't add 10+ seconds to every reload.
+    for _err_attempt in range(3):
+        # First check if the page is already healthy (no reload needed yet)
+        try:
+            _page_text = await _session.page.evaluate("() => document.documentElement.innerText")
+            if "something went wrong" not in (_page_text or "").lower():
+                break
+        except Exception:
+            break
+
+        print(f"  [fill_form] 'Something went wrong' page (attempt {_err_attempt + 1}) — reloading")
+        try:
+            await _session.page.reload(wait_until="domcontentloaded", timeout=20_000)
+        except Exception as _rel_exc:
+            print(f"  [fill_form] reload error: {_rel_exc}")
+
+        # Wait for form or detect another crash — exits as soon as either appears
+        try:
+            await _session.page.wait_for_selector(
+                "[data-automation-id='formField'], input[type='text']",
+                timeout=8_000,
+            )
+        except Exception:
+            pass   # timed out — outer loop re-checks page_text on next attempt
+    else:
+        # All 3 reloads exhausted — check one final time
+        try:
+            _page_text = await _session.page.evaluate("() => document.documentElement.innerText")
+            if "something went wrong" in (_page_text or "").lower():
+                print("  [fill_form] page still broken after 3 reloads — failing job")
+                return {"status": "failed", "error": "Workday page error persists after reload attempts"}
+        except Exception:
+            pass
+
     platform = state.get("ats_platform", "unknown")
     handler = _get_handler(platform, _session)
 
@@ -141,19 +216,48 @@ async def fill_form_node(state: AgentState) -> dict:
     job_title = state.get("job_title") or "Software Engineer"
     hitl_threshold = float(os.getenv("LLM_CONFIDENCE_THRESHOLD", "0.7"))
 
+    # Always reload custom_answers from DB so HITL answers are visible immediately
+    # without requiring a stale state dict to be updated.
+    if profile:
+        from database.connection import get_session as _db_session
+        from database.models import CustomAnswer as _CA
+        user_id = state.get("user_id", 1)
+        try:
+            with _db_session() as _sess:
+                rows = _sess.query(_CA).filter_by(user_id=user_id).all()
+                profile = {**profile, "custom_answers": {r.key: r.value for r in rows}}
+        except Exception:
+            pass
+
     from agents.nodes.field_resolver import resolve_field
 
     resolved_fields: list = list(state.get("resolved_fields") or [])
     unanswered_fields: list = list(state.get("unanswered_fields") or [])
 
+    # Labels already resolved in a prior HITL iteration — skip them to avoid
+    # re-filling fields and re-triggering HITL for the same field.
+    already_resolved_labels: set = {
+        r.get("field_label", "") for r in resolved_fields
+    }
+
     # Extract fields on the current page section
     raw_fields = await handler.extract_form_fields()
 
     if not raw_fields:
-        print(f"  [fill_form] no fields found on current section")
+        print(f"  [fill_form] no fields found on current section — trying to advance")
+        has_next = await handler.next_section()
+        if has_next:
+            print(f"  [fill_form] advanced past empty section")
+            return {
+                "resolved_fields": [],
+                "pending_hitl_field": None,
+                "form_complete": False,
+            }
+        print(f"  [fill_form] no fields and no next button — marking complete")
         return {
             "resolved_fields": resolved_fields,
             "pending_hitl_field": None,
+            "form_complete": True,
         }
 
     print(f"  [fill_form] resolving {len(raw_fields)} fields")
@@ -163,7 +267,43 @@ async def fill_form_node(state: AgentState) -> dict:
         locator = field.get("locator", "")
         field_type = field.get("field_type", "text")
 
-        # Resolve value
+        # Skip fields already resolved in a prior HITL iteration
+        if label and label in already_resolved_labels:
+            print(f"    skipping already-resolved '{label}'")
+            continue
+
+        # File fields — use generated pipeline files directly, never LLM/HITL
+        if field_type == "file":
+            label_lower = label.lower()
+            file_path = None
+            source = "skipped"
+            if "resume" in label_lower or "cv" in label_lower:
+                file_path = state.get("tailored_resume_path")
+                source = "tailored_resume"
+            elif "cover" in label_lower:
+                file_path = _save_cover_letter_pdf(
+                    state.get("cover_letter"), state.get("job_company", "")
+                )
+                source = "cover_letter"
+
+            if file_path and os.path.exists(file_path):
+                success = await handler.fill_field(locator, file_path, "file")
+                print(f"    {'filled' if success else 'failed'} '{label}' = '{file_path}' [{source}]")
+            else:
+                print(f"    [fill_form] skipping file field '{label}' — no file available")
+
+            resolved_fields.append({
+                "field_label": label,
+                "field_type": "file",
+                "field_locator": locator,
+                "resolved_value": file_path,
+                "resolution_source": source,
+                "confidence": 1.0 if file_path else 0.0,
+                "context": "file from pipeline state",
+            })
+            continue
+
+        # Resolve non-file fields through the 4-step chain
         result: FieldResolutionResult = await resolve_field(
             field=field,
             profile=profile,
@@ -182,8 +322,8 @@ async def fill_form_node(state: AgentState) -> dict:
                 "unanswered_fields": unanswered_fields,
             }
 
-        # Fill the field
-        if result["resolved_value"] and locator:
+        # Fill the field (resolved_value="" is valid — e.g. searchbox picks first option)
+        if result["resolved_value"] is not None and locator:
             success = await handler.fill_field(
                 locator, result["resolved_value"], field_type
             )
@@ -195,23 +335,50 @@ async def fill_form_node(state: AgentState) -> dict:
 
         resolved_fields.append(result)
 
-    # Try to advance to next section
+    # Try to advance to next section.
+    # next_section() returns:
+    #   True  — advanced successfully (new section loaded)
+    #   False — button clicked but validation error (stayed on same section)
+    #   None  — no Next/Save button found (truly at the end)
     has_next = await handler.next_section()
-    if has_next:
+
+    if has_next is True:
         print(f"  [fill_form] advanced to next section")
-        # Return to fill_form via the graph loop (no pending HITL)
         return {
-            "resolved_fields": resolved_fields,
+            "resolved_fields": [],
             "pending_hitl_field": None,
             "unanswered_fields": unanswered_fields,
+            "form_complete": False,
+            "retry_count": 0,
         }
 
-    # No more sections — ready to submit
+    if has_next is False:
+        # Validation error — Workday rejected the section; retry up to 3 times
+        retry_count = state.get("retry_count", 0) + 1
+        print(f"  [fill_form] validation error on section — retry {retry_count}/3")
+        if retry_count >= 3:
+            print(f"  [fill_form] giving up after 3 retries — marking failed")
+            return {
+                "status": "failed",
+                "error": "Workday validation error persists after 3 retries",
+                "form_complete": False,
+            }
+        return {
+            "resolved_fields": [],   # clear so retry re-fills the section
+            "pending_hitl_field": None,
+            "unanswered_fields": unanswered_fields,
+            "form_complete": False,
+            "retry_count": retry_count,
+        }
+
+    # has_next is None — no button found → all sections complete
     print(f"  [fill_form] all sections complete")
     return {
         "resolved_fields": resolved_fields,
         "pending_hitl_field": None,
         "unanswered_fields": unanswered_fields,
+        "form_complete": True,
+        "retry_count": 0,
     }
 
 
@@ -249,5 +416,27 @@ async def submit_node(state: AgentState) -> dict:
 
     await _session.close()
     _session = None
+
+    # Clean up generated files after successful submission
+    if success:
+        for key in ("tailored_resume_path",):
+            path = state.get(key)
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                    print(f"  [submit] deleted {path}")
+                except Exception as exc:
+                    print(f"  [submit] could not delete {path}: {exc}")
+
+        # Cover letter PDF is saved under assets/cover_letters/
+        company = state.get("job_company", "")
+        safe_company = re.sub(r"[^\w]", "_", company.lower())[:20]
+        cl_path = Path("assets/cover_letters") / f"cover_letter_{safe_company}.pdf"
+        if cl_path.exists():
+            try:
+                cl_path.unlink()
+                print(f"  [submit] deleted {cl_path}")
+            except Exception as exc:
+                print(f"  [submit] could not delete {cl_path}: {exc}")
 
     return {"status": "submitted" if success else "failed"}

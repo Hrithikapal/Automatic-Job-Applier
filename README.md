@@ -15,7 +15,7 @@ playwright install chromium
 
 # 2. Configure credentials
 cp .env.example .env
-# Edit .env — add your ANTHROPIC_API_KEY and job site credentials
+# Edit .env — add your GROQ_API_KEY and job site credentials
 
 # 3. Seed the demo profile and job queue
 python demo.py --seed-only
@@ -99,7 +99,7 @@ Every field on every ATS form is resolved through a **4-step precedence chain**:
 
 2. **Custom answers** — fuzzy key matching (token overlap >= 0.7) against your `custom_answers` table. Handles sponsorship, salary, notice period, EEO demographics, and anything else you've pre-answered.
 
-3. **LLM inference** — Claude is given the candidate's full profile + job description and asked to infer the best answer with a confidence score. Temperature 0.3 for consistency. If confidence >= `LLM_CONFIDENCE_THRESHOLD` (.env), the answer is used automatically.
+3. **LLM inference** — The LLM is given the candidate's full profile + job description and asked to infer the best answer with a confidence score. Temperature 0.3 for consistency. If confidence >= `LLM_CONFIDENCE_THRESHOLD` (.env), the answer is used automatically.
 
 4. **HITL (human-in-the-loop)** — triggered when confidence is too low. See next section.
 

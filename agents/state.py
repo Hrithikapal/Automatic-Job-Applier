@@ -33,7 +33,8 @@ class AgentState(TypedDict):
     user_profile: Optional[Dict]    # serialised User.to_dict()
 
     # ── Generated artefacts ──────────────────────────────────────────────
-    tailored_resume: Optional[str]  # plain-text resume tailored to this JD
+    tailored_resume: Optional[str]       # plain-text resume tailored to this JD
+    tailored_resume_path: Optional[str]  # path to tailored PDF (if generated)
     cover_letter: Optional[str]
 
     # ── Browser session state ────────────────────────────────────────────
@@ -50,6 +51,7 @@ class AgentState(TypedDict):
     error: Optional[str]
     unanswered_fields: List[Dict]   # accumulates across HITL timeouts
     retry_count: int
+    form_complete: Optional[bool]   # True when all wizard sections are done
 
     # ── Metadata ─────────────────────────────────────────────────────────
     started_at: Optional[str]

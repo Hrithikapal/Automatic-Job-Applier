@@ -29,15 +29,18 @@ from agents.nodes.hitl import hitl_node, record_result_node
 def route_after_fill(state: AgentState) -> str:
     """
     After fill_form:
-      - pending HITL field  → go to hitl node
       - error               → record result (failed)
-      - otherwise           → submit
+      - pending HITL field  → go to hitl node
+      - form_complete=True  → submit (all sections done)
+      - otherwise           → loop back to fill_form (advanced a section)
     """
     if state.get("status") == "failed":
         return "error"
     if state.get("pending_hitl_field"):
         return "hitl"
-    return "submit"
+    if state.get("form_complete"):
+        return "submit"
+    return "fill_form"
 
 
 def route_after_hitl(state: AgentState) -> str:
@@ -84,9 +87,10 @@ def build_graph() -> StateGraph:
         "fill_form",
         route_after_fill,
         {
-            "hitl": "hitl",
-            "submit": "submit",
-            "error": "record_result",
+            "hitl":      "hitl",
+            "submit":    "submit",
+            "error":     "record_result",
+            "fill_form": "fill_form",   # loop: advanced a section, keep filling
         },
     )
 

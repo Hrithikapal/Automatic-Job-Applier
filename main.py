@@ -14,10 +14,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-async def run(user_id: int = 1) -> None:
+async def run(user_id: int = 1, ats_platform: str = None) -> None:
     from database.connection import init_db, get_session_factory
     from database.models import User
-    from queue.manager import JobQueueManager
+    from job_queue.manager import JobQueueManager
     from agents.graph import build_graph
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
@@ -50,7 +50,8 @@ async def run(user_id: int = 1) -> None:
     # Print queue stats
     stats = queue.get_stats()
     queued = stats.get("queued", 0)
-    print(f"[Agent] Queue — {queued} job(s) ready")
+    platform_label = f" (platform={ats_platform})" if ats_platform else ""
+    print(f"[Agent] Queue — {queued} job(s) ready{platform_label}")
     if queued == 0:
         print("[Agent] Nothing to process. Add jobs via queue.add_job() or re-seed.")
         return
@@ -59,7 +60,7 @@ async def run(user_id: int = 1) -> None:
 
     processed = 0
     while True:
-        job = queue.dequeue_next()
+        job = queue.dequeue_next(ats_platform=ats_platform)
         if not job:
             print(f"\n[Agent] Queue empty. Processed {processed} job(s) this run.")
             break
@@ -91,6 +92,7 @@ async def run(user_id: int = 1) -> None:
             "resolved_fields": None,
             "pending_hitl_field": None,
             "error": None,
+            "form_complete": None,
             "started_at": started.isoformat(),
         }
 
@@ -110,8 +112,9 @@ async def run(user_id: int = 1) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI Job Application Agent")
     parser.add_argument("--user-id", type=int, default=1, help="Candidate user ID (default: 1)")
+    parser.add_argument("--platform", type=str, default=None, help="Only process jobs for this ATS platform (e.g. workday, greenhouse, lever, linkedin)")
     args = parser.parse_args()
-    asyncio.run(run(user_id=args.user_id))
+    asyncio.run(run(user_id=args.user_id, ats_platform=args.platform))
 
 
 if __name__ == "__main__":

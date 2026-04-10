@@ -1,13 +1,13 @@
 """
 database/seed.py — Seed the demo candidate profile and job queue.
 
-Demo user: Alex Chen — mid-level Software Engineer, 3.5 years experience.
-Demo jobs: 6 URLs across Workday, Greenhouse, and LinkedIn Easy Apply.
+Demo user: Hrithika Pal — mid-level Software Engineer, 3.5 years experience.
+Demo jobs: 6 real URLs across Workday, Greenhouse, and Lever.
 
 Run via:
     python demo.py --seed-only
 
-Idempotent — skips seeding if Alex Chen already exists.
+Idempotent — skips seeding if Hrithika Pal already exists.
 """
 import os
 from database.connection import init_db, get_session
@@ -24,55 +24,56 @@ from database.models import User, WorkExperience, Education, Skill, CustomAnswer
 DEMO_JOBS = [
     # Workday
     {
-        "url": "https://amazon.jobs/en/jobs/2994617/software-development-engineer",
-        "company": "Amazon",
+        "url": "https://workday.wd5.myworkdayjobs.com/en-US/Workday/details/Software-Development-Engineer_JR-0105664?Location_Country=c4f78be1a8f14da0ab49ce1162348a5e",
+        "company": "Workday",
         "title": "Software Development Engineer",
         "ats_platform": "workday",
     },
     {
-        "url": "https://jobs.careers.microsoft.com/global/en/job/1822352/Software-Engineer-II",
-        "company": "Microsoft",
-        "title": "Software Engineer II",
+        "url": "https://workday.wd5.myworkdayjobs.com/en-US/Workday/details/Principal-Software-Development-Engineer_JR-0105659?Location_Country=c4f78be1a8f14da0ab49ce1162348a5e",
+        "company": "Workday",
+        "title": "Principal Software Development Engineer",
         "ats_platform": "workday",
     },
     # Greenhouse
     {
-        "url": "https://boards.greenhouse.io/notion/jobs/6006323",
-        "company": "Notion",
-        "title": "Software Engineer, Product",
+        "url": "https://job-boards.greenhouse.io/postman/jobs/7687341003",
+        "company": "Postman",
+        "title": "Software Engineer, IAM",
         "ats_platform": "greenhouse",
     },
     {
-        "url": "https://boards.greenhouse.io/linear/jobs/4430477005",
-        "company": "Linear",
+        "url": "https://job-boards.greenhouse.io/easyship/jobs/4588340006",
+        "company": "Easyship",
         "title": "Software Engineer",
         "ats_platform": "greenhouse",
     },
     # LinkedIn Easy Apply
-    # NOTE: Replace these job IDs with real LinkedIn Easy Apply listings.
+    # NOTE: Replace job IDs with real LinkedIn Easy Apply listings.
+    # Use the direct /jobs/view/<id>/ URL format (more reliable than search-results).
     # Find them at linkedin.com/jobs — look for the "Easy Apply" button.
     {
-        "url": "https://www.linkedin.com/jobs/view/4119952906/",
-        "company": "Dropbox",
-        "title": "Software Engineer",
+        "url": "https://www.linkedin.com/jobs/view/4386720314/",
+        "company": "Emburse",
+        "title": "Software Engineer III - Node.JS",
         "ats_platform": "linkedin",
     },
     {
-        "url": "https://www.linkedin.com/jobs/view/4089871234/",
-        "company": "Atlassian",
-        "title": "Software Engineer",
+        "url": "https://www.linkedin.com/jobs/view/4397276758/",
+        "company": "Radiant Digital",
+        "title": "Full Stack Engineer",
         "ats_platform": "linkedin",
     },
 ]
 
 
 def seed_demo() -> None:
-    """Seed Alex Chen's profile and the demo job queue. Idempotent."""
+    """Seed Hrithika Pal's profile and the demo job queue. Idempotent."""
     init_db()
 
     with get_session() as session:
         # Check if already seeded
-        existing = session.query(User).filter_by(email="alex.chen.dev@gmail.com").first()
+        existing = session.query(User).filter_by(email="hrithikapal9@gmail.com").first()
         if existing:
             print("[Seed] Demo profile already exists — skipping user seed.")
             _seed_jobs(session)
@@ -82,14 +83,14 @@ def seed_demo() -> None:
         # User profile
         # ----------------------------------------------------------------
         user = User(
-            full_name="Alex Chen",
-            email="alex.chen.dev@gmail.com",
-            phone="+1 (415) 555-0192",
+            full_name="Hrithika Pal",
+            email="hrithikapal9@gmail.com",
+            phone="04155 550 192",
             location="San Francisco, CA",
             linkedin_url="https://linkedin.com/in/alexchen-swe",
-            github_url="https://github.com/alexchen-dev",
+            github_url="https://github.com/Hrithikapal",
             portfolio_url="https://alexchen.dev",
-            resume_path="assets/resumes/alex_chen_resume.pdf",
+            resume_path="assets/resumes/hrithika_pal_resume.pdf",
             summary=(
                 "Software Engineer with 3.5 years of experience building scalable backend "
                 "systems and developer-facing APIs. Proven track record shipping high-impact "
@@ -205,13 +206,14 @@ def seed_demo() -> None:
              "US citizen / permanent resident"),
             ("notice_period", "2 weeks",
              "Standard notice period"),
-            ("salary_expectation", "150000",
+            ("salary_expectation", "150kUSD",
              "Base salary in USD; open to discussing total comp"),
             ("willing_to_relocate", "Yes",
              "Open to relocating within the US"),
             ("heard_about_job", "LinkedIn",
              "Default when no specific source is known"),
             ("gender", "Prefer not to say", None),
+            ("hispanic_ethnicity", "No, not hispanic or latino", None),
             ("veteran_status", "I am not a veteran", None),
             ("disability_status", "I do not have a disability", None),
             ("remote_preference", "Open to remote or hybrid",
@@ -235,27 +237,38 @@ def seed_demo() -> None:
             ))
 
         session.commit()
-        print(f"[Seed] Created demo user: Alex Chen (id={user.id})")
+        print(f"[Seed] Created demo user: Hrithika Pal (id={user.id})")
 
         # Generate resume PDF if missing
-        resume_path = "assets/resumes/alex_chen_resume.pdf"
+        resume_path = "assets/resumes/hrithika_pal_resume.pdf"
         if not os.path.exists(resume_path):
             try:
-                from assets.resumes.generate_resume import generate_alex_chen_resume
-                generate_alex_chen_resume(resume_path)
+                from assets.resumes.generate_resume import generate_hrithika_pal_resume
+                generate_hrithika_pal_resume(resume_path)
             except Exception as exc:
                 print(f"[Seed] Resume PDF generation skipped: {exc}")
 
         _seed_jobs(session)
 
 
-def _seed_jobs(session) -> None:
-    """Add demo jobs to the queue. Skips any URL already present."""
+def _seed_jobs(session, force: bool = False) -> None:
+    """
+    Seed DEMO_JOBS into the queue.
+
+    force=True  — delete ALL existing jobs first, then re-insert every entry.
+    force=False — skip URLs already present (default / first-time behaviour).
+    """
+    if force:
+        deleted = session.query(Job).delete()
+        session.commit()
+        print(f"[Seed] Cleared {deleted} existing job(s) from the queue.")
+
     added = 0
     for job_data in DEMO_JOBS:
-        existing = session.query(Job).filter_by(url=job_data["url"]).first()
-        if existing:
-            continue
+        if not force:
+            existing = session.query(Job).filter_by(url=job_data["url"]).first()
+            if existing:
+                continue
         session.add(Job(
             url=job_data["url"],
             company=job_data["company"],
@@ -266,7 +279,11 @@ def _seed_jobs(session) -> None:
         added += 1
 
     session.commit()
-    if added:
-        print(f"[Seed] Added {added} job(s) to the queue.")
-    else:
-        print("[Seed] All demo jobs already in queue.")
+    print(f"[Seed] Added {added} job(s) to the queue.")
+
+
+def reseed_jobs() -> None:
+    """Delete all existing jobs and re-insert DEMO_JOBS fresh."""
+    init_db()
+    with get_session() as session:
+        _seed_jobs(session, force=True)

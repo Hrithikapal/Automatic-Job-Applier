@@ -23,17 +23,18 @@ class JobQueueManager:
     # Dequeue                                                              #
     # ------------------------------------------------------------------ #
 
-    def dequeue_next(self) -> Optional[Job]:
+    def dequeue_next(self, ats_platform: Optional[str] = None) -> Optional[Job]:
         """
         Atomically fetch and lock the next queued job.
         Sets status → processing so concurrent workers skip it.
+        Pass ats_platform to filter by a specific ATS (e.g. 'workday').
         """
         with self._factory() as session:
+            query = select(Job).where(Job.status == JobStatus.QUEUED)
+            if ats_platform:
+                query = query.where(Job.ats_platform == ats_platform)
             job = session.execute(
-                select(Job)
-                .where(Job.status == JobStatus.QUEUED)
-                .order_by(Job.created_at.asc())
-                .limit(1)
+                query.order_by(Job.created_at.asc()).limit(1)
             ).scalar_one_or_none()
 
             if job:

@@ -34,9 +34,12 @@ class BrowserSession:
         if headless is None:
             headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
 
+        slow_mo = int(os.getenv("BROWSER_SLOW_MO", "300"))  # ms between actions
+
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(
             headless=headless,
+            slow_mo=slow_mo,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
         self._context = await self._browser.new_context(
